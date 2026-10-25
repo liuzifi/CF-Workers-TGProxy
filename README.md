@@ -4,14 +4,13 @@ Cloudflare Workers 的 Telegram Web/MTProto WebSocket 代理中继（KWS Lanes�
 
 [`telegram_webproxy.js`](./telegram_webproxy.js) 是一个单文件 Cloudflare Workers 实现：它扮演 Telegram 官方 Web Proxy（td web-proxy）后端，把客户端（Desktop / Android）在隔离 webview 里发起的 WebSocket lanes，直接转接到 **Telegram Web K 自己的 KWS 通道**（`kws{dc}[-1].web.telegram.org/apiws`）。
 
-它不再依赖一套独立的 MTProxy / middle proxy 后端：Worker 在本地解开客户端 MTProto 传输层的 obfuscation，再用自己生成的随机密钥重新封一层，拨 Telegram 官方的 Web K 入口。内层 MTProto 载荷始终由客户端端到端加密，Worker 不接触、也不做 mtp 层加解密。此外，还内置了**开箱即用的落地看板与实时负载监控**，便于用户直接分发与观测。
+它不再依赖一套独立的 MTProxy / middle proxy 后端：Worker 在本地解开客户端 MTProto 传输层的 obfuscation，再用自己生成的随机密钥重新封一层，拨 Telegram 官方的 Web K 入口。内层 MTProto 载荷始终由客户端端到端加密，Worker 不接触、也不做 mtp 层加解密。此外，还内置了**开箱即用的落地看板与部署配置说明**，便于用户直接分发与部署。
 
 ## 核心能力
 
 当前代码主线包含：
 
-- **自适应服务落地看板**：浏览器直接访问时展示 Element 风格的代理服务中心，全自动提取当前域名与密钥生成 `tg://webproxy` 专属一键导入与复制链接
-- **Edge 内存实时监控**：无需外部数据库或重型组件，在 Worker 内存中零开销埋点采集在线连接数、累计吞吐流量、会话总数与 Uptime，提供 `/api/stats` 接口与前端 3 秒自刷新展示
+- **登录保护的服务落地看板**：浏览器直接访问先出示登录页，输入 `ADMIN_PASSWORD` 后才展示 Element 风格的代理服务中心，全自动提取当前域名与密钥生成 `tg://webproxy` 一键导入、`t.me` 分享链接与复制按钮；页内附部署配置说明，可在浏览器本地随机生成 `SECRET` / `BOOT` 并点击复制
 - td web-proxy 页面：nonce + 严格 CSP，仅允许 `frame-ancestors http://127.0.0.1:*`
 - Android 应用内 web-proxy 桥（`globalThis.TelegramWebProxy` 双向 postMessage）
 - 多 lane WebSocket 复用：子协议 `tproxy-lane-v1.<token>.<sid>`
@@ -31,7 +30,7 @@ flowchart LR
   end
 
   subgraph Worker ["Cloudflare Worker 边缘路由"]
-    Dash["落地看板 HTML (含 /api/stats 轮询)"]
+    Dash["落地看板 HTML (导入链接 + 部署说明)"]
     P["Worker 隧道页面 (nonce CSP)"]
     WS["/api/v1/ws (Lanes 中继)"]
   end
@@ -44,14 +43,14 @@ flowchart LR
 
 ```text
 1. 普通浏览器访问：
-  GET / (无签名) → 动态下发服务看板（展示 tg://webproxy 导入链接 + 3秒轮询 /api/stats）
+  GET / (无签名) → 动态下发服务看板（展示 tg://webproxy 导入链接 + 部署配置说明）
 
 2. Telegram 客户端连接：
   webview 页面
     → 建立 /api/v1/session（POST，带 bootstrap）
     → 拿到 session token + X-Carrier-Mode: websocket-lanes
     → 按流开 lane：/api/v1/ws + 子协议 tproxy-lane-v1.<token>.<sid>
-    → Worker: 解 obfuscation → 重新封头 → 拨 KWS → 中继（同步累加流量与连接指标）
+    → Worker: 解 obfuscation → 重新封头 → 拨 KWS → 中继
 ```
 
 ```markdown
@@ -61,14 +60,13 @@ Cloudflare Workers 的 Telegram Web/MTProto WebSocket 代理中继（KWS Lanes�
 
 [`telegram_webproxy.js`](./telegram_webproxy.js) 是一个单文件 Cloudflare Workers 实现：它扮演 Telegram 官方 Web Proxy（td web-proxy）后端，把客户端（Desktop / Android）在隔离 webview 里发起的 WebSocket lanes，直接转接到 **Telegram Web K 自己的 KWS 通道**（`kws{dc}[-1].web.telegram.org/apiws`）。
 
-它不再依赖一套独立的 MTProxy / middle proxy 后端：Worker 在本地解开客户端 MTProto 传输层的 obfuscation，再用自己生成的随机密钥重新封一层，拨 Telegram 官方的 Web K 入口。内层 MTProto 载荷始终由客户端端到端加密，Worker 不接触、也不做 mtp 层加解密。此外，还内置了**开箱即用的落地看板与实时负载监控**，便于用户直接分发与观测。
+它不再依赖一套独立的 MTProxy / middle proxy 后端：Worker 在本地解开客户端 MTProto 传输层的 obfuscation，再用自己生成的随机密钥重新封一层，拨 Telegram 官方的 Web K 入口。内层 MTProto 载荷始终由客户端端到端加密，Worker 不接触、也不做 mtp 层加解密。此外，还内置了**开箱即用的落地看板与部署配置说明**，便于用户直接分发与部署。
 
 ## 核心能力
 
 当前代码主线包含：
 
-- **自适应服务落地看板**：浏览器直接访问时展示 Element 风格的代理服务中心，全自动提取当前域名与密钥生成 `tg://webproxy` 专属一键导入与复制链接
-- **Edge 内存实时监控**：无需外部数据库或重型组件，在 Worker 内存中零开销埋点采集在线连接数、累计吞吐流量、会话总数与 Uptime，提供 `/api/stats` 接口与前端 3 秒自刷新展示
+- **自适应服务落地看板**：浏览器直接访问时展示 Element 风格的代理服务中心，全自动提取当前域名与密钥生成 `tg://webproxy` 一键导入、`t.me` 分享链接与复制按钮；页内附部署配置说明，可在浏览器本地随机生成 `SECRET` / `BOOT` 并点击复制
 - td web-proxy 页面：nonce + 严格 CSP，仅允许 `frame-ancestors http://127.0.0.1:*`
 - Android 应用内 web-proxy 桥（`globalThis.TelegramWebProxy` 双向 postMessage）
 - 多 lane WebSocket 复用：子协议 `tproxy-lane-v1.<token>.<sid>`
@@ -89,7 +87,7 @@ flowchart LR
 
   subgraph Cloudflare Worker 边缘路由
     Route{"路由与请求判定"}
-    Dash["落地看板 HTML (/api/stats 轮询)"]
+    Dash["落地看板 HTML (导入链接 + 部署说明)"]
     P["Worker 隧道页面 (nonce CSP)"]
     WS["/api/v1/ws (Lanes 中继)"]
   end
@@ -102,14 +100,14 @@ flowchart LR
 
 ```text
 1. 普通浏览器访问：
-  GET / (无签名) → 动态下发服务看板（展示 tg://webproxy 导入链接 + 3秒轮询 /api/stats）
+  GET / (无签名) → 动态下发服务看板（展示 tg://webproxy 导入链接 + 部署配置说明）
 
 2. Telegram 客户端连接：
   webview 页面
     → 建立 /api/v1/session（POST，带 bootstrap）
     → 拿到 session token + X-Carrier-Mode: websocket-lanes
     → 按流开 lane：/api/v1/ws + 子协议 tproxy-lane-v1.<token>.<sid>
-    → Worker: 解 obfuscation → 重新封头 → 拨 KWS → 中继（同步累加流量与连接指标）
+    → Worker: 解 obfuscation → 重新封头 → 拨 KWS → 中继
 ```
 
 ## 为什么从官方 MTProto 转向 KWS 转换
@@ -169,15 +167,13 @@ TG 客户端本身就有多流、并且会自动分流，所以 lanes 让**每�
 
 目的都是削减高频小 `frame` 带来的固定调度成本，而不是再造一层重型队列。
 
-### 3. 落地看板与轻量级实时监控
+### 3. 落地看板与部署配置说明
 
-无需额外搭建管理端或引入重型数据库：
-- **动静分流识别**：请求根路径 `/` 时，若携带 Telegram Desktop / Android 校验签名的 `?bridge=` 参数，严格走带有严格 CSP 的隧道通道 `mkPage`；若为普通浏览器直接访问，则下发美观的 Element 风格落地看板。
-- **动态配置适配**：看板自动读取用户当前访问的 Hostname 及环境绑定的 `SECRET`，动态拼接 `tg://webproxy?server=${host}&secret=${secret}`，免除部署后手工修改前端配置的繁琐。
-- **零开销内存埋点**：
-  - **实时在线人数**：在 WebSocket 握手成功与断开关闭回调（`onClose`）中同步对 `activeConnections` 计数。
-  - **吞吐与会话**：在 `write()`（上行）与 `emitDn()`（下行）处直读缓冲区分片大小累加至 `totalTrafficBytes`，在 `/api/v1/session` 建立时统计总会话。
-  - 前端基于原生 JS 每 3 秒轻量轮询 `/api/stats`，并实现带降级兜底的原生剪贴板复制提示。
+无需额外搭建管理端：
+- **动静分流识别**：请求根路径 `/` 时，若携带 Telegram Desktop / Android 校验签名的 `?bridge=` 参数，严格走带有严格 CSP 的隧道通道 `mkPage`；若为普通浏览器直接访问，则下发 Element 风格的落地看板。
+- **动态配置适配**：看板自动读取当前访问的 Hostname 及环境绑定的 `SECRET`，拼接 `tg://webproxy?server=${host}&secret=${secret}` 与 `https://t.me/webproxy?server=${host}&secret=${secret}`，免除手工修改前端配置。
+- **访问控制**：未登录只返回登录页，页面源码中不含 `SECRET`；登录态为 HMAC 签名的 `__Host-` Cookie（HttpOnly / Secure / SameSite=Strict，12 小时），签名密钥绑定 `BOOT` 与登录密码，更换任一项即全部登录态失效；密码常量时间比较，同 IP 连续错误 5 次锁定 10 分钟（isolate 内存级限速）；未配置或不足 8 位的密码一律拒绝登录，不会放行。
+- **部署配置说明**：看板内给出链接格式 `https://t.me/webproxy?server=你的域名&secret=你的secret`，并在浏览器本地（`crypto.getRandomValues`）随机生成 `SECRET`（32 位 hex）与 `BOOT`（48 位 hex），点击数值即可复制，也可一键复制 `SECRET=…` / `BOOT=…`。随机值不会上传。
 
 ### 4. 鉴权与租约
 
@@ -229,30 +225,35 @@ TG 客户端本身就有多流、并且会自动分流，所以 lanes 让**每�
 
 `openssl rand` 走系统 CSPRNG，是真随机。任一必需绑定缺失，`mkCfg` 直接抛错，`/health` 会返回 `500` 而不是 `{"ok":true}`。
 
+### 看板登录变量
+
+| 绑定 | 意义 | 要求 |
+| --- | --- | --- |
+| `ADMIN_PASSWORD` | 看板登录密码 | 至少 `8` 位，建议 `openssl rand -base64 18`；类型选 Secret。未配置时看板显示「未配置访问密码」，代理功能不受影响 |
+
 ### 可选变量（自定义看板）
 
 | 绑定 | 意义 | 说明 | 默认值 |
 | --- | --- | --- | --- |
 | `TG_BOT` | 交流群组 / 机器人用户名 | 看板底部联系方式按钮所指向的 TG 机器人用户名（无需加 `@`） | `eoops_bot` |
-| `MACHINE_BOOT_TIME` | 边缘节点/机器启动时间 | 自定义在看板指标卡中展示的系统启动时间字符串 | Worker 实例初始化时间 |
-| `MACHINE_UPTIME` | 累计运行时长文本 | 自定义在看板指标卡中展示的机器累计运行时间 | 实例存活计算时长 |
 
 ## 路由
 
 | 路径 | 方法 | 说明 |
 | --- | --- | --- |
-| `/` | `GET` / `HEAD` | **带 bridge 签名**：下发内置 web-proxy 通信隧道页面<br>**浏览器直接访问**：下发代理服务中心落地看板（含一键导入链接与实时指标） |
-| `/api/stats` | `GET` | 实时监控接口，返回当前在线人数、吞吐、会话数与 Uptime 的 JSON 数据 |
+| `/` | `GET` / `HEAD` | **带 bridge 签名**：下发内置 web-proxy 通信隧道页面<br>**浏览器直接访问**：未登录下发登录页，登录后下发落地看板（含一键导入链接与部署配置说明） |
+| `/login` | `POST` | 看板登录（表单字段 `password`），成功后写入登录 Cookie 并跳转 `/` |
+| `/logout` | `POST` | 退出登录，清除 Cookie |
 | `/health` | `GET` | 节点健康检查，返回 `{"ok":true}` |
-| `/api/v1/session` | `POST` | 建会话，返回 session token（累计会话计数 +1） |
+| `/api/v1/session` | `POST` | 建会话，返回 session token |
 | `/api/v1/session` | `DELETE` | 注销会话 |
-| `/api/v1/ws` | `GET` | lane WebSocket（需 `Upgrade` 与正确子协议，建立/销毁时维护在线并发计数） |
+| `/api/v1/ws` | `GET` | lane WebSocket（需 `Upgrade` 与正确子协议） |
 
 ## 文件
 
 | 文件 | 说明 |
 | --- | --- |
-| [telegram_webproxy.js](./telegram_webproxy.js) | Worker 主实现：页面 / 监控仪表盘 / session / lane / obfuscation / KWS 中继 |
+| [telegram_webproxy.js](./telegram_webproxy.js) | Worker 主实现：页面 / 落地看板 / session / lane / obfuscation / KWS 中继 |
 
 ## 访问优化（CNAME / SaaS 优选）
 

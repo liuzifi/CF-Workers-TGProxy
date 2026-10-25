@@ -4,32 +4,6 @@ const txt = new TextEncoder(), dec = new TextDecoder(), nil = new Uint8Array(0),
 const CRYPTO = globalThis.crypto, macKeys = new Map(), leases = new Map();
 const reply = (body = null, status = 404) => new Response(body, { status });
 
-// ======================== 全局监控埋点统计 ========================
-const STATS = {
-  startTime: Date.now(),
-  totalSessions: 0,
-  activeConnections: 0,
-  totalTrafficBytes: 0,
-};
-
-function formatTraffic(bytes) {
-  if (bytes < 1024) return bytes + ' B';
-  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(2) + ' KB';
-  if (bytes < 1024 * 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(2) + ' MB';
-  return (bytes / (1024 * 1024 * 1024)).toFixed(2) + ' GB';
-}
-
-function formatDuration(ms) {
-  const sec = Math.floor(ms / 1000);
-  const d = Math.floor(sec / 86400);
-  const h = Math.floor((sec % 86400) / 3600);
-  const m = Math.floor((sec % 3600) / 60);
-  if (d > 0) return `${d}天 ${h}小时`;
-  if (h > 0) return `${h}小时 ${m}分钟`;
-  return `${m}分钟`;
-}
-// =================================================================
-
 function u8(v) { if (v instanceof Uint8Array && v.constructor === Uint8Array) return v; if (v instanceof ArrayBuffer) return new Uint8Array(v); if (ArrayBuffer.isView(v)) return new Uint8Array(v.buffer, v.byteOffset, v.byteLength); throw TypeError(); }
 const dup = v => u8(v).slice();
 function cat(...args) { const parts = args.filter(v => v?.byteLength).map(u8); const out = new Uint8Array(parts.reduce((total, part) => total + part.byteLength, 0)); let o = 0; for (const part of parts) { out.set(part, o); o += part.byteLength; } return out; }
@@ -62,7 +36,7 @@ const bearer = v => /^Bearer ([^\s]+)$/.exec(v || '')?.[1] ?? null;
 const binary = req => req.headers.get('Content-Type')?.trim().toLowerCase() === 'application/octet-stream';
 function hello(body) { if (body.byteLength !== 9 || body[0] !== 0x10 || body[1] !== 0 || body[2] !== 0 || body[3] !== 0 || new DataView(body.buffer, body.byteOffset, body.byteLength).getUint32(4, false) !== 1 || body[8] !== 1) { throw Error(); } }
 const protos = req => (req.headers.get('Sec-WebSocket-Protocol') ?? '').split(',').map(v => v.trim()).filter(Boolean);
-const mkCfg = ({ SECRET, BOOT }) => { const secret = String(SECRET || '').trim(), boot = String(BOOT || '').trim(); if (!secret) throw Error(); if (!boot) throw Error(); return { secret, key: getKey(secret), boot }; };
+const mkCfg = ({ SECRET, BOOT, ADMIN_PASSWORD }) => { const secret = String(SECRET || '').trim(), boot = String(BOOT || '').trim(), admin = String(ADMIN_PASSWORD || '').trim(); if (!secret) throw Error(); if (!boot) throw Error(); return { secret, key: getKey(secret), boot, admin: admin.length >= 8 ? admin : '' }; };
 async function mkCap(secret, host) { const key = macKey( getKey(secret, true), `bridge:${String(secret).trim().toLowerCase()}`, ); const sig = await sign( key, txt.encode(`tdesktop-web-proxy-bridge-v1\n${hostOf(host)}`), ); return b64(sig); }
 async function bridge(url, secret) { if (url.pathname !== '/' || url.search.length !== 51) return null; const cand = url.search.slice(8); if (url.search !== `?bridge=${cand}` || !/^[A-Za-z0-9_-]{43}$/.test(cand)) return null; const host = hostOf(url.hostname); const want = await mkCap(secret, host); if (cand.length !== want.length) return null; let diff = 0; for (let i = 0; i < want.length; i++) diff |= cand.charCodeAt(i) ^ want.charCodeAt(i); return diff === 0 ? host : null; }
 const sha = async v => new Uint8Array(await CRYPTO.subtle.digest('SHA-256', u8(v)));
@@ -111,7 +85,6 @@ const mkSession = ({ secret, sid, onClose, lease }) => { let sock = null, closed
     const n = data.byteLength;
     if (n > st.in) throw Error();
     if (st.pItems >= 16384) { throw Error(); }
-    STATS.totalTrafficBytes += n; // 记录上行加密流量
     st.in -= n; st.pItems++;
     st.proxy.push(data).then(accepted => { freeUp(st); if (closed || st.closed || accepted === false) return; st.in += n; const delta = new Uint8Array(4); new DataView(delta.buffer).setUint32(0, n); send(4, delta).catch(() => close()); }, () => { freeUp(st); if (!closed && !st.closed) st.proxy.close(); }).catch(() => close());
   };
@@ -122,7 +95,6 @@ const mkSession = ({ secret, sid, onClose, lease }) => { let sock = null, closed
       if (closed || st.closed) throw Error();
       const n = Math.min(64 * 1024, b.byteLength - o, st.out);
       st.out -= n;
-      STATS.totalTrafficBytes += n; // 记录下行加密流量
       await send(2, b.subarray(o, o + n));
       o += n;
     }
@@ -161,7 +133,7 @@ if(!init&&aNonce&&android&&typeof android.postMessage==='function'){ const aPort
     .replace('__BOOTSTRAP__', JSON.stringify(String(boot)));
   const csp = [ "default-src 'none'", "base-uri 'none'", "child-src 'none'", `connect-src 'self' wss://${host}`, "font-src 'none'", "form-action 'none'", 'frame-ancestors http://127.0.0.1:*', "frame-src 'none'", "img-src 'none'", "manifest-src 'none'", "media-src 'none'", "object-src 'none'", `script-src 'nonce-${nonce}'`, "style-src 'none'", "worker-src 'none'", 'sandbox allow-same-origin allow-scripts', ].join('; '); return { body, csp }; }
 
-// ======================== 前端监控与一键导入页面 ========================
+// ======================== 一键导入与部署说明页面 ========================
 function mkDashboard(host, secret, botName = 'eoops_bot') {
   const proxyUrl = `tg://webproxy?server=${host}&secret=${secret}`;
   return `<!DOCTYPE html>
@@ -228,7 +200,7 @@ function mkDashboard(host, secret, botName = 'eoops_bot') {
   .detail-item { display: flex; flex-direction: column; }
   .detail-label { color: #909399; font-size: 11px; margin-bottom: 2px; }
   .detail-value { font-family: Consolas, Monaco, monospace; color: #303133; font-weight: 500; word-break: break-all; }
-  .btn-group { display: flex; gap: 8px; margin-top: 8px; }
+  .btn-group { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
   .btn {
     padding: 8px 16px;
     font-size: 13px;
@@ -248,12 +220,19 @@ function mkDashboard(host, secret, botName = 'eoops_bot') {
   .btn-default:hover { color: #409eff; border-color: #c6e2ff; background-color: #ecf5ff; }
   .btn-success { background-color: #67c23a; color: #ffffff; border-color: #67c23a; }
   .btn-success:hover { background-color: #85ce61; border-color: #85ce61; }
-  .metrics-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; margin-top: 8px; }
-  .metric-card { background: #fafafa; border: 1px solid #ebeef5; border-radius: 4px; padding: 12px; text-align: center; }
-  .metric-title { font-size: 12px; color: #909399; margin-bottom: 4px; }
-  .metric-value { font-family: Consolas, Monaco, monospace; font-size: 17px; font-weight: 600; color: #303133; }
-  .metric-unit { font-size: 12px; color: #909399; font-weight: normal; }
-  .metric-sub { font-size: 11px; color: #c0c4cc; margin-top: 2px; }
+  .header-right { display: flex; align-items: center; gap: 8px; }
+  .header-right form { margin: 0; }
+  .btn-sm { padding: 5px 10px; font-size: 12px; flex-shrink: 0; }
+  .gen-row { margin-bottom: 12px; }
+  .gen-line { display: flex; gap: 8px; align-items: stretch; }
+  .gen-val {
+    flex: 1; min-width: 0; font-family: Consolas, Monaco, monospace; font-size: 13px; color: #409eff;
+    background: #ecf5ff; border: 1px solid #d9ecff; border-radius: 4px; padding: 7px 10px;
+    word-break: break-all; cursor: pointer; user-select: all;
+  }
+  .gen-val:hover { background: #d9ecff; }
+  .gen-cmd { font-family: Consolas, Monaco, monospace; font-size: 11px; color: #909399; margin-top: 3px; word-break: break-all; }
+  .steps { font-size: 13px; color: #606266; line-height: 1.7; padding-left: 18px; margin-bottom: 12px; }
   .group-box { background: #fdfdfd; border: 1px solid #ebeef5; border-radius: 4px; padding: 16px; }
   .group-text { font-size: 13px; color: #606266; line-height: 1.5; margin-bottom: 12px; }
   .toast {
@@ -277,7 +256,10 @@ function mkDashboard(host, secret, botName = 'eoops_bot') {
 <div class="container">
   <div class="header">
     <div class="title">Telegram 代理服务中心</div>
-    <div class="badge-success">● 服务就绪 (Online)</div>
+    <div class="header-right">
+      <div class="badge-success">● 服务就绪 (Online)</div>
+      <form method="POST" action="/logout"><button type="submit" class="btn btn-default btn-sm">退出登录</button></form>
+    </div>
   </div>
   
   <div class="content">
@@ -302,43 +284,42 @@ function mkDashboard(host, secret, botName = 'eoops_bot') {
         <div class="btn-group">
           <a href="${proxyUrl}" class="btn btn-primary">一键导入连接</a>
           <button class="btn btn-default" onclick="copyText('${proxyUrl}', 'WEB 完整链接已复制')">复制完整连接</button>
+          <button class="btn btn-default" onclick="copyText('https://t.me/webproxy?server=${host}&secret=${secret}', 't.me 分享链接已复制')">复制 t.me 分享链接</button>
         </div>
       </div>
     </div>
 
     <div class="card-section">
-      <div class="section-label">2. 节点负载与实时监控 (Prometheus 实时采集)</div>
-      <div class="metrics-grid">
-        <div class="metric-card">
-          <div class="metric-title">当前在线人数</div>
-          <div class="metric-value" id="val-online" style="color: #67c23a;">0 <span class="metric-unit">人</span></div>
-          <div class="metric-sub">实时并发连接</div>
+      <div class="section-label">2. 部署配置说明</div>
+      <div class="group-box">
+        <div class="group-text">分享给用户的链接格式（把域名和密钥换成你自己的，点击可复制）：</div>
+        <div class="proxy-url-text" style="cursor: pointer;" title="点击复制" onclick="copyText(this.textContent, '链接格式已复制')">https://t.me/webproxy?server=你的域名&amp;secret=你的secret</div>
+        <ol class="steps">
+          <li>在 Cloudflare 控制台打开 Worker →「设置」→「变量和机密」。</li>
+          <li>添加下面两个变量，类型选 <b>Secret</b>（加密），保存并重新部署。</li>
+          <li>用 <b>SECRET</b> 和你的域名拼出上面的链接，发给用户即可。</li>
+        </ol>
+        <div class="gen-row">
+          <div class="detail-label">SECRET（32 位 hex，点击数值复制）</div>
+          <div class="gen-line">
+            <code class="gen-val" id="gen-secret" title="点击复制" onclick="copyText(this.textContent, 'SECRET 已复制')"></code>
+            <button class="btn btn-default btn-sm" onclick="regen('secret')">重新生成</button>
+          </div>
+          <div class="gen-cmd">等价命令：openssl rand -hex 16</div>
         </div>
-        <div class="metric-card">
-          <div class="metric-title">累计加密吞吐</div>
-          <div class="metric-value" id="val-traffic" style="color: #409eff;">0.00 B</div>
-          <div class="metric-sub">双向总传输量</div>
+        <div class="gen-row">
+          <div class="detail-label">BOOT（48 位随机串，点击数值复制）</div>
+          <div class="gen-line">
+            <code class="gen-val" id="gen-boot" title="点击复制" onclick="copyText(this.textContent, 'BOOT 已复制')"></code>
+            <button class="btn btn-default btn-sm" onclick="regen('boot')">重新生成</button>
+          </div>
+          <div class="gen-cmd">等价命令：openssl rand -hex 24</div>
         </div>
-        <div class="metric-card">
-          <div class="metric-title">累计建立会话</div>
-          <div class="metric-value" id="val-sessions">0 <span class="metric-unit">次</span></div>
-          <div class="metric-sub">总接入 Sessions</div>
+        <div class="btn-group" style="margin-top: 0;">
+          <button class="btn btn-primary" onclick="copyEnv()">复制 SECRET=… 和 BOOT=…</button>
+          <button class="btn btn-default" onclick="regen('secret'); regen('boot')">全部重新生成</button>
         </div>
-        <div class="metric-card">
-          <div class="metric-title">持续稳定运行</div>
-          <div class="metric-value" id="val-uptime" style="font-size: 15px;">计算中...</div>
-          <div class="metric-sub">当前实例连续运行时间</div>
-        </div>
-        <div class="metric-card">
-          <div class="metric-title">最近一次启动</div>
-          <div class="metric-value" id="val-machine-boot" style="font-size: 14px;">计算中...</div>
-          <div class="metric-sub">边缘服务启动时间</div>
-        </div>
-        <div class="metric-card">
-          <div class="metric-title">服务累计运行时长</div>
-          <div class="metric-value" id="val-machine-uptime" style="font-size: 15px;">计算中...</div>
-          <div class="metric-sub">实例健康活跃时间</div>
-        </div>
+        <div class="group-text" style="margin: 10px 0 0; font-size: 12px; color: #909399;">随机值在你的浏览器本地生成，不会上传。BOOT 只能填进 Worker 变量，不要发给任何人；更换 SECRET 后，旧的代理链接会失效。</div>
       </div>
     </div>
 
@@ -376,27 +357,73 @@ function showToast(msg) {
   toast.classList.add('show');
   setTimeout(function() { toast.classList.remove('show'); }, 2000);
 }
-function updateMetrics() {
-  fetch('/api/stats')
-    .then(function(res) { return res.json(); })
-    .then(function(data) {
-      var onlineEl = document.getElementById('val-online');
-      var trafficEl = document.getElementById('val-traffic');
-      var sessEl = document.getElementById('val-sessions');
-      var uptimeEl = document.getElementById('val-uptime');
-      var machineBootEl = document.getElementById('val-machine-boot');
-      var machineUptimeEl = document.getElementById('val-machine-uptime');
-      if (onlineEl) onlineEl.innerHTML = data.active_connections + ' <span class="metric-unit">人</span>';
-      if (trafficEl) trafficEl.textContent = data.total_traffic;
-      if (sessEl) sessEl.innerHTML = data.total_sessions + ' <span class="metric-unit">次</span>';
-      if (uptimeEl) uptimeEl.textContent = data.uptime;
-      if (machineBootEl) machineBootEl.textContent = data.machine_boot_time;
-      if (machineUptimeEl) machineUptimeEl.textContent = data.machine_uptime;
-    }).catch(function() {});
+function randHex(n) {
+  var b = new Uint8Array(n); crypto.getRandomValues(b);
+  var s = '';
+  for (var i = 0; i < n; i++) s += ('0' + b[i].toString(16)).slice(-2);
+  return s;
 }
-updateMetrics();
-setInterval(updateMetrics, 3000);
+function regen(kind) {
+  var el = document.getElementById('gen-' + kind);
+  if (el) el.textContent = kind === 'secret' ? randHex(16) : randHex(24);
+}
+function copyEnv() {
+  var nl = String.fromCharCode(10);
+  copyText('SECRET=' + document.getElementById('gen-secret').textContent + nl + 'BOOT=' + document.getElementById('gen-boot').textContent, '环境变量已复制');
+}
+regen('secret'); regen('boot');
 </script>
+</body>
+</html>`;
+}
+
+// ======================== 看板登录与访问控制 ========================
+const AUTH_COOKIE = '__Host-tgp_auth', AUTH_TTL = 12 * 60 * 60 * 1000, MAX_FAILS = 5, LOCK_MS = 10 * 60 * 1000;
+const fails = new Map(); // ip -> { n, until }（isolate 内存级限速）
+// 会话密钥同时绑定 BOOT 与登录密码：任一变更，已签发的登录态立即失效
+const authKey = cfg => `${cfg.boot}\nadmin\n${cfg.admin}`;
+function cookieOf(req, name) { for (const part of (req.headers.get('Cookie') || '').split(';')) { const i = part.indexOf('='); if (i > 0 && part.slice(0, i).trim() === name) return part.slice(i + 1).trim(); } return ''; }
+const authed = async (req, cfg) => !!cfg.admin && await verify(cookieOf(req, AUTH_COOKIE), authKey(cfg), 'admin');
+async function pwOk(input, want) { const a = await sha(txt.encode(input)), b = await sha(txt.encode(want)); let diff = 0; for (let i = 0; i < a.length; i++) diff |= a[i] ^ b[i]; return diff === 0; }
+const htmlRes = (body, status = 200, extra = {}) => new Response(body, { status, headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer', 'Content-Security-Policy': "frame-ancestors 'none'", ...extra } });
+const goHome = cookie => new Response(null, { status: 303, headers: { Location: '/', 'Cache-Control': 'no-store', 'Set-Cookie': cookie } });
+
+function mkLogin(msg = '', locked = false) {
+  const body = locked
+    ? `<div class="tip">看板尚未配置访问密码。<br>请在 Worker「设置 → 变量和机密」中添加 <b>ADMIN_PASSWORD</b>（类型选 Secret，至少 8 位），保存并重新部署后刷新本页。<br><span class="cmd">生成命令：openssl rand -base64 18</span></div>`
+    : `<form method="POST" action="/login" autocomplete="off">
+      <input type="password" name="password" placeholder="请输入访问密码" maxlength="256" required autofocus autocomplete="current-password">
+      ${msg ? `<div class="err">${msg}</div>` : ''}
+      <button type="submit">登 录</button>
+    </form>`;
+  return `<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>登录 - Telegram 代理服务中心</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; background: #f0f2f5; color: #303133; display: flex; justify-content: center; align-items: center; min-height: 100vh; padding: 24px 16px; }
+  .box { width: 100%; max-width: 380px; background: #fff; border: 1px solid #dcdfe6; border-radius: 6px; box-shadow: 0 2px 12px rgba(0,0,0,.05); padding: 28px; }
+  h1 { font-size: 18px; font-weight: 600; margin-bottom: 4px; }
+  .sub { font-size: 13px; color: #909399; margin-bottom: 20px; }
+  input { width: 100%; padding: 10px 12px; font-size: 14px; border: 1px solid #dcdfe6; border-radius: 4px; outline: none; }
+  input:focus { border-color: #409eff; }
+  button { width: 100%; margin-top: 14px; padding: 10px; font-size: 14px; font-weight: 500; color: #fff; background: #409eff; border: 1px solid #409eff; border-radius: 4px; cursor: pointer; }
+  button:hover { background: #66b1ff; border-color: #66b1ff; }
+  .err { margin-top: 10px; font-size: 13px; color: #f56c6c; }
+  .tip { font-size: 13px; color: #606266; line-height: 1.8; background: #fdf6ec; border: 1px solid #faecd8; border-radius: 4px; padding: 12px; }
+  .cmd { font-family: Consolas, Monaco, monospace; font-size: 12px; color: #909399; }
+</style>
+</head>
+<body>
+<div class="box">
+  <h1>Telegram 代理服务中心</h1>
+  <div class="sub">请先登录后查看代理链接与部署配置</div>
+  ${body}
+</div>
 </body>
 </html>`;
 }
@@ -406,26 +433,30 @@ const route = async (req, env) => {
   const url = new URL(req.url), { pathname: path, origin } = url, { method, headers } = req; let cfg;
   try { cfg = mkCfg(env); } catch { return ['/', '/health', '/api/v1/session', '/api/v1/ws'].includes(path) ? reply(null, 500) : reply(); }
 
-  // 1. 新增：实时统计 API 接口
-  if (path === '/api/stats' && method === 'GET') {
-    const uptimeStr = formatDuration(Date.now() - STATS.startTime);
-    const bootDate = new Date(STATS.startTime);
-    const bootStr = `${bootDate.getFullYear()}-${String(bootDate.getMonth()+1).padStart(2,'0')}-${String(bootDate.getDate()).padStart(2,'0')} ${String(bootDate.getHours()).padStart(2,'0')}:${String(bootDate.getMinutes()).padStart(2,'0')}`;
-    return new Response(JSON.stringify({
-      active_connections: STATS.activeConnections,
-      total_sessions: STATS.totalSessions,
-      total_traffic: formatTraffic(STATS.totalTrafficBytes),
-      uptime: uptimeStr,
-      machine_boot_time: env.MACHINE_BOOT_TIME || bootStr,
-      machine_uptime: env.MACHINE_UPTIME || uptimeStr,
-    }), {
-      status: 200,
-      headers: {
-        'Content-Type': 'application/json; charset=utf-8',
-        'Access-Control-Allow-Origin': '*',
-        'Cache-Control': 'no-store',
-      },
-    });
+  // 登录 / 退出
+  if (path === '/login') {
+    if (method !== 'POST') return goHome('');
+    if (!cfg.admin) return htmlRes(mkLogin('', true), 503);
+    const o = headers.get('Origin');
+    if (o) { // 兼容 CNAME / SaaS 优选：Origin 与 Worker 看到的域名不一致时，再对比 Host 与 Sec-Fetch-Site
+      let ok = o === origin; try { ok = ok || new URL(o).host === headers.get('Host'); } catch {}
+      if (!ok && headers.get('Sec-Fetch-Site') !== 'same-origin') return htmlRes(mkLogin('请求来源校验失败，请直接在本页面输入密码登录'), 403);
+    }
+    const ip = headers.get('CF-Connecting-IP') || 'unknown', now = Date.now(), rec = fails.get(ip);
+    if (rec && rec.until > now) return htmlRes(mkLogin(`尝试次数过多，请 ${Math.ceil((rec.until - now) / 60000)} 分钟后再试`), 429);
+    let pw = ''; try { pw = String((await req.formData()).get('password') ?? '').trim(); } catch {}
+    if (!pw || pw.length > 256 || !(await pwOk(pw, cfg.admin))) {
+      if (fails.size > 2000) for (const [k, v] of fails) if (v.until <= now) fails.delete(k);
+      const n = (rec?.n ?? 0) + 1; fails.set(ip, n >= MAX_FAILS ? { n: 0, until: now + LOCK_MS } : { n, until: 0 });
+      return htmlRes(mkLogin('密码错误'), 401);
+    }
+    fails.delete(ip);
+    const tok = await mkToken(authKey(cfg), 'admin', now + AUTH_TTL, rand(12));
+    return goHome(`${AUTH_COOKIE}=${tok}; Path=/; Max-Age=${AUTH_TTL / 1000}; HttpOnly; Secure; SameSite=Strict`);
+  }
+  if (path === '/logout') {
+    if (method !== 'POST') return goHome('');
+    return goHome(`${AUTH_COOKIE}=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Strict`);
   }
 
   // 2. 根路径：区分 Telegram Client 桥接 vs 普通浏览器访问
@@ -449,19 +480,16 @@ const route = async (req, env) => {
         },
       });
     }
-    // 如果是普通浏览器直接访问根路径，返回高颜值导入与监控看板
+    // 普通浏览器访问：未登录只给登录页，登录后才下发含密钥的看板
     if (method === 'HEAD') return new Response(null, { status: 200 });
-    const botName = env.TG_BOT || 'eoops_bot';
-    const dashboardHtml = mkDashboard(url.hostname, cfg.secret, botName);
-    return new Response(dashboardHtml, {
-      status: 200,
-      headers: { 'Content-Type': 'text/html; charset=utf-8' },
-    });
+    if (!cfg.admin) return htmlRes(mkLogin('', true), 503);
+    if (!(await authed(req, cfg))) return htmlRes(mkLogin());
+    return htmlRes(mkDashboard(url.hostname, cfg.secret, env.TG_BOT || 'eoops_bot'));
   }
 
   if (path === '/health') { return new Response('{"ok":true}', { headers: { 'content-type': 'application/json; charset=utf-8' }, }); }
 
-  // 3. 会话创建与销毁（埋点：totalSessions）
+  // 3. 会话创建与销毁
   if (path === '/api/v1/session') {
     const auth = bearer(headers.get('Authorization'));
     if (method === 'DELETE') {
@@ -477,7 +505,6 @@ const route = async (req, env) => {
       const body = new Uint8Array(await req.arrayBuffer());
       hello(body);
       const token = await mkSess(cfg.boot);
-      STATS.totalSessions++; // 记录累计会话数 +1
       return new Response(enc(0x11, 0), {
         status: 200,
         headers: {
@@ -490,7 +517,7 @@ const route = async (req, env) => {
     } catch { return reply(); }
   }
 
-  // 4. WebSocket 数据管道（埋点：activeConnections）
+  // 4. WebSocket 数据管道
   if (path !== '/api/v1/ws' || method !== 'GET' || headers.get('Upgrade')?.toLowerCase() !== 'websocket' || (headers.has('Origin') && headers.get('Origin') !== origin)) { return reply(); }
   const offers = protos(req); const proto = offers.length === 1 ? offers[0] : null;
   const parts = proto?.split('.') ?? [], [kind, token = '', id] = parts, sid = Number(id);
@@ -500,13 +527,11 @@ const route = async (req, env) => {
   if (lease.deleted || lease.used.has(sid) || lease.active.size >= 128 || lease.used.size >= 4096) { return reply(null, 409); }
   lease.used.add(sid); lease.active.add(sid);
 
-  STATS.activeConnections++; // 在线并发连接数 +1
   const sess = mkSession({
     secret: cfg.key,
     sid,
     lease,
     onClose: () => {
-      STATS.activeConnections = Math.max(0, STATS.activeConnections - 1); // 断开连接数 -1
       lease.active.delete(sid);
     },
   });
